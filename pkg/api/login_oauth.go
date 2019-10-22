@@ -211,6 +211,9 @@ func (hs *HTTPServer) OAuthLogin(ctx *m.ReqContext) {
 	// login
 	hs.loginUserWithUser(cmd.Result, ctx)
 
+	ctx.SetCookie("sess_key_token", token.AccessToken)
+	ctx.SetCookie("sess_key_oauth_mode", name)
+
 	metrics.MApiLoginOAuth.Inc()
 
 	if redirectTo, _ := url.QueryUnescape(ctx.GetCookie("redirect_to")); len(redirectTo) > 0 {

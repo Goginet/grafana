@@ -21,6 +21,8 @@ import (
 	"github.com/grafana/grafana/pkg/services/guardian"
 	"github.com/grafana/grafana/pkg/setting"
 	"github.com/grafana/grafana/pkg/util"
+
+	"github.com/grafana/grafana/pkg/login/social"
 )
 
 const (
@@ -180,6 +182,21 @@ func DeleteDashboardByUID(c *m.ReqContext) Response {
 	return deleteDashboard(c)
 }
 
+func getDashboardFolder(dashboard *m.Dashboard) string {
+	if dashboard.FolderId == 0 {
+		return "General"
+	}
+
+	folderQuery := m.GetDashboardQuery{Id: dashboard.FolderId}
+	err := bus.Dispatch(&folderQuery)
+	if err != nil {
+		return "unknown"
+	}
+	folderName := folderQuery.Result.Title
+
+	return folderName
+}
+
 func deleteDashboard(c *m.ReqContext) Response {
 	dash, rsp := getDashboardHelper(c.OrgId, c.Params(":slug"), 0, c.Params(":uid"))
 	if rsp != nil {
@@ -196,6 +213,24 @@ func deleteDashboard(c *m.ReqContext) Response {
 		return Error(400, "Dashboard cannot be deleted because it was provisioned", err)
 	} else if err != nil {
 		return Error(500, "Failed to delete dashboard", err)
+	}
+
+	authModule := c.AuthModule
+	connect, _ := social.SocialMap[authModule]
+
+	updateOptions := social.UpdateDashboardOptions{
+		Dashboard: "",
+		Message:   "",
+		OrgId:     c.OrgId,
+		Action:    social.DeleteDashboard,
+		Title:     dash.Title,
+		Name:      dash.Slug,
+		Folder:    getDashboardFolder(dash),
+	}
+
+	err = connect.UpdateDashboard(&updateOptions, c.Token)
+	if err != nil {
+		return Error(500, err.Error(), err)
 	}
 
 	return JSON(200, util.DynMap{
@@ -271,6 +306,10 @@ func (hs *HTTPServer) PostDashboard(c *m.ReqContext, cmd m.SaveDashboardCommand)
 		if err == m.ErrDashboardNotFound {
 			return JSON(404, util.DynMap{"status": "not-found", "message": err.Error()})
 		}
+		if err == m.ErrDashboardGitlabSync || err == m.ErrDashboardGitlabToken {
+			return Error(500, err.Error(), err)
+		}
+
 		return Error(500, "Failed to save dashboard", err)
 	}
 

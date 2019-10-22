@@ -4,8 +4,11 @@ import (
 	"strings"
 	"time"
 
+	"encoding/json"
+
 	"github.com/grafana/grafana/pkg/bus"
 	"github.com/grafana/grafana/pkg/infra/log"
+	"github.com/grafana/grafana/pkg/login/social"
 	"github.com/grafana/grafana/pkg/models"
 	"github.com/grafana/grafana/pkg/services/guardian"
 	"github.com/grafana/grafana/pkg/util"
@@ -243,6 +246,29 @@ func (dr *dashboardServiceImpl) SaveDashboard(dto *SaveDashboardDTO) (*models.Da
 		return nil, err
 	}
 
+	if dto.User.Token != "" {
+		newDashboard := dto.Dashboard
+		previousDashboard := getPreviousDashboard(newDashboard)
+
+		var err error
+
+		// TODO: Refactor
+		if previousDashboard != nil {
+			if previousDashboard.FolderId != dto.Dashboard.FolderId {
+				err = updateDashboard(previousDashboard, social.DeleteDashboard, dto.User, "")
+				err = updateDashboard(newDashboard, social.CreateDashboard, dto.User, "")
+			} else {
+				err = updateDashboard(newDashboard, social.UpdateDashboard, dto.User, dto.Message)
+			}
+		} else {
+			err = updateDashboard(newDashboard, social.CreateDashboard, dto.User, "")
+		}
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	err = bus.Dispatch(cmd)
 	if err != nil {
 		return nil, err
@@ -282,10 +308,79 @@ func (dr *dashboardServiceImpl) deleteDashboard(dashboardId int64, orgId int64, 
 	return bus.Dispatch(cmd)
 }
 
+func getPreviousDashboard(newDashboard *models.Dashboard) *models.Dashboard {
+	if newDashboard.Version == 0 {
+		return nil
+	}
+
+	oldDashboardQuery := models.GetDashboardQuery{Id: newDashboard.Id}
+	err := bus.Dispatch(&oldDashboardQuery)
+	if err != nil {
+		return nil
+	}
+
+	return oldDashboardQuery.Result
+}
+
+func getDashboardFolder(dashboard *models.Dashboard) string {
+	if dashboard.FolderId == 0 {
+		return "General"
+	}
+
+	folderQuery := models.GetDashboardQuery{Id: dashboard.FolderId}
+	err := bus.Dispatch(&folderQuery)
+	if err != nil {
+		return "unknown"
+	}
+	folderName := folderQuery.Result.Title
+
+	return folderName
+}
+
+func updateDashboard(dashboard *models.Dashboard, action social.DashboardAction,
+	user *models.SignedInUser, message string) error {
+
+	authModule := user.AuthModule
+	connect, _ := social.SocialMap[authModule]
+
+	dashboardModel, err := json.MarshalIndent(dashboard.Data, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	folderName := getDashboardFolder(dashboard)
+
+	updateOptions := social.UpdateDashboardOptions{
+		Dashboard: string(dashboardModel),
+		Message:   message,
+		OrgId:     dashboard.OrgId,
+		Action:    action,
+		Title:     dashboard.Title,
+		Folder:    folderName,
+		Name:      dashboard.Slug,
+	}
+
+	err = connect.UpdateDashboard(&updateOptions, user.Token)
+
+	return err
+}
+
 func (dr *dashboardServiceImpl) ImportDashboard(dto *SaveDashboardDTO) (*models.Dashboard, error) {
 	cmd, err := dr.buildSaveDashboardCommand(dto, false, true)
 	if err != nil {
 		return nil, err
+	}
+
+	if dto.User.Token != "" {
+		newDashboard := dto.Dashboard
+
+		err := updateDashboard(newDashboard, social.CreateDashboard, dto.User, dto.Message)
+
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		return nil, models.ErrDashboardGitlabSync
 	}
 
 	err = bus.Dispatch(cmd)

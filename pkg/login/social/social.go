@@ -23,16 +23,39 @@ type BasicUserInfo struct {
 	Groups  []string
 }
 
+type DashboardAction string
+
+const (
+	UpdateDashboard DashboardAction = "update"
+	CreateDashboard DashboardAction = "create"
+	DeleteDashboard DashboardAction = "delete"
+)
+
+type UpdateDashboardOptions struct {
+	Action    DashboardAction
+	Message   string
+	Title     string
+	Name      string
+	Dashboard string
+	Folder    string
+	OrgId     int64
+}
+
 type SocialConnector interface {
 	Type() int
 	UserInfo(client *http.Client, token *oauth2.Token) (*BasicUserInfo, error)
 	IsEmailAllowed(email string) bool
 	IsSignupAllowed() bool
+	UpdateDashboard(options *UpdateDashboardOptions, token string) error
 
 	AuthCodeURL(state string, opts ...oauth2.AuthCodeOption) string
 	Exchange(ctx context.Context, code string, authOptions ...oauth2.AuthCodeOption) (*oauth2.Token, error)
 	Client(ctx context.Context, t *oauth2.Token) *http.Client
 	TokenSource(ctx context.Context, t *oauth2.Token) oauth2.TokenSource
+}
+
+func (s SocialBase) UpdateDashboard(options *UpdateDashboardOptions, token string) error {
+	return nil
 }
 
 type SocialBase struct {
@@ -131,6 +154,24 @@ func NewOAuthService() {
 
 		// GitLab.
 		if name == "gitlab" {
+			reposSettings := setting.Raw.ChildSections("auth." + name + ".repo")
+			var repos []*GrafanaGitlabRepo
+
+			for _, repoSetting := range reposSettings {
+				org_id, _ := repoSetting.Key("org_id").Int64()
+				repo_id, _ := repoSetting.Key("repo_id").Int()
+
+				repo := &GrafanaGitlabRepo{
+					Branch:         repoSetting.Key("branch").String(),
+					OrgId:          org_id,
+					RepoId:         repo_id,
+					DashboardsPath: repoSetting.Key("dashboards_path").String(),
+					Url:            repoSetting.Key("url").String(),
+				}
+
+				repos = append(repos, repo)
+			}
+
 			SocialMap["gitlab"] = &SocialGitlab{
 				SocialBase: &SocialBase{
 					Config: &config,
@@ -140,6 +181,7 @@ func NewOAuthService() {
 				apiUrl:         info.ApiUrl,
 				allowSignup:    info.AllowSignup,
 				allowedGroups:  util.SplitString(sec.Key("allowed_groups").String()),
+				repos:          repos,
 			}
 		}
 

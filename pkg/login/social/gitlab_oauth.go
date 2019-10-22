@@ -4,12 +4,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"regexp"
+
+	"github.com/xanzy/go-gitlab"
 
 	"github.com/grafana/grafana/pkg/models"
 
 	"golang.org/x/oauth2"
 )
+
+type GrafanaGitlabRepo struct {
+	OrgId          int64
+	RepoId         int
+	Branch         string
+	DashboardsPath string
+	Url            string
+}
 
 type SocialGitlab struct {
 	*SocialBase
@@ -17,11 +28,82 @@ type SocialGitlab struct {
 	allowedGroups  []string
 	apiUrl         string
 	allowSignup    bool
+	repos          []*GrafanaGitlabRepo
 }
 
 var (
 	ErrMissingGroupMembership = &Error{"User not a member of one of the required groups"}
 )
+
+func (s *SocialGitlab) getRepo(orgId int64) *GrafanaGitlabRepo {
+	// TODO: Check multiple repositories
+	for _, repo := range s.repos {
+		if repo.OrgId == orgId {
+			return repo
+		}
+	}
+
+	return nil
+}
+
+func (s *SocialGitlab) getGitlabAction(action DashboardAction) gitlab.FileAction {
+	switch action {
+	case UpdateDashboard:
+		return gitlab.FileUpdate
+	case CreateDashboard:
+		return gitlab.FileCreate
+	case DeleteDashboard:
+		return gitlab.FileDelete
+	}
+
+	return gitlab.FileUpdate
+}
+
+func createCommitMessage(options *UpdateDashboardOptions) (message string) {
+	switch options.Action {
+	case CreateDashboard:
+		message = fmt.Sprintf("Create %s dashboard", options.Title)
+	case DeleteDashboard:
+		message = fmt.Sprintf("Delete %s dashboard", options.Title)
+	case UpdateDashboard:
+		message = fmt.Sprintf("Update %s dashboard\n\n%s", options.Title, options.Message)
+	}
+
+	return
+}
+
+func (s *SocialGitlab) UpdateDashboard(options *UpdateDashboardOptions, token string) error {
+	org_id := options.OrgId
+	repo := s.getRepo(org_id)
+	message := createCommitMessage(options)
+	fileName := fmt.Sprintf("%s.json", options.Name)
+	filePath := path.Join(repo.DashboardsPath, options.Folder, fileName)
+
+	client := &http.Client{}
+
+	commit := &gitlab.CreateCommitOptions{
+		Branch:        &repo.Branch,
+		CommitMessage: &message,
+		Actions: []*gitlab.CommitAction{
+			{
+				Action:   s.getGitlabAction(options.Action),
+				Content:  options.Dashboard,
+				FilePath: filePath,
+			},
+		},
+	}
+
+	git := gitlab.NewOAuthClient(client, token)
+	git.SetBaseURL(repo.Url)
+
+	_, _, err := git.Commits.CreateCommit(repo.RepoId, commit)
+
+	if err != nil {
+		return models.ErrDashboardGitlabSync
+	}
+
+	return nil
+}
 
 func (s *SocialGitlab) Type() int {
 	return int(models.GITLAB)

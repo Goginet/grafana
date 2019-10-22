@@ -13,6 +13,8 @@ import (
 
 // Typed errors
 var (
+	ErrDashboardGitlabSync                       = errors.New("Commit to the repository failed")
+	ErrDashboardGitlabToken                      = errors.New("You have to be authenticated via GitLab")
 	ErrDashboardNotFound                         = errors.New("Dashboard not found")
 	ErrDashboardFolderNotFound                   = errors.New("Folder not found")
 	ErrDashboardSnapshotNotFound                 = errors.New("Dashboard snapshot not found")

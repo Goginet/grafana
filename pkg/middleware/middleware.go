@@ -218,7 +218,18 @@ func initContextWithToken(authTokenService models.UserTokenService, ctx *models.
 		return false
 	}
 
-	ctx.SignedInUser = query.Result
+	result := query.Result
+
+	repoToken := ctx.GetCookie("sess_key_token")
+	oauthMode := ctx.GetCookie("sess_key_oauth_mode")
+
+	if repoToken != "" {
+		result.AuthModule = oauthMode
+		result.Token = repoToken
+	}
+
+	ctx.SignedInUser = result
+
 	ctx.IsSignedIn = true
 	ctx.UserToken = token
 
